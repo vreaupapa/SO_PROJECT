@@ -190,10 +190,66 @@ void list_reports(const char *district){
     close(fd);
 }
 
+void remove_report(const char* district, const char* role, const char* user, int report_id) {
+    if (strcmp(role, "manager") != 0) {
+        printf("Error: Only managers can remove reports.\n");
+        return;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/reports.dat", district);
+
+    int fd = open(path, O_RDWR);
+    if (fd == -1) {
+        perror("Error opening reports.dat for removal");
+        return;
+    }
+
+    Report r;
+    int found = 0;
+    long write_pos = 0;
+    long read_pos = 0;
+
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        if (r.id == report_id) {
+            found = 1;
+            write_pos = lseek(fd, 0, SEEK_CUR) - sizeof(Report);
+            break;
+        }
+    }
+
+    if (!found) {
+        printf("Report ID %d not found in district %s.\n", report_id, district);
+        close(fd);
+        return;
+    }
+
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        read_pos = lseek(fd, 0, SEEK_CUR); 
+
+        lseek(fd, write_pos, SEEK_SET);    
+        write(fd, &r, sizeof(Report));     
+
+        write_pos = lseek(fd, 0, SEEK_CUR); 
+        lseek(fd, read_pos, SEEK_SET);     
+    }
+
+    struct stat st;
+    fstat(fd, &st);
+    if (ftruncate(fd, st.st_size - sizeof(Report)) == -1) {
+        perror("Error truncating file");
+    } else {
+        printf("Report %d removed and file truncated successfully.\n", report_id);
+    }
+
+    close(fd);
+
+    log_operation(district, role, user, "Removed a report");
+}
+
 
 void add(const char* district_name, const char* role, const char* user){
     create_district_dir(district_name);
-
     create_config_file(district_name);
 
     char path[256];
@@ -204,27 +260,51 @@ void add(const char* district_name, const char* role, const char* user){
         return;
     }
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0664);
+    // Deschidem pentru citire/scriere ca să putem verifica ultimul ID
+    int fd = open(path, O_RDWR | O_CREAT, 0664);
     if(fd == -1) {
         perror("Error opening reports.dat");
         return;
     }
-    //ensure permissions are exactly as requested using chmod
     chmod(path, 0664);
-    //getting report data
+
     Report report;
+    
+    // --- LOGICA NOUĂ PENTRU ID ---
+    struct stat st;
+    fstat(fd, &st);
+    
+    if (st.st_size == 0) {
+        // Fișierul e nou/gol
+        report.id = 1; 
+    } else {
+        // Mergem la începutul ultimului record
+        lseek(fd, -sizeof(Report), SEEK_END);
+        Report last_report;
+        if (read(fd, &last_report, sizeof(Report)) == sizeof(Report)) {
+            report.id = last_report.id + 1;
+        } else {
+            report.id = 1; // Fallback în caz de eroare
+        }
+    }
+    // Ne asigurăm că pointerul de scriere este la finalul fișierului pentru noul raport
+    lseek(fd, 0, SEEK_END);
+    // -----------------------------
+
+    printf("Adding report with ID: %d\n", report.id);
     printf("Latitude: "); scanf("%f", &report.latitude);
     printf("Longitude: "); scanf("%f", &report.longitude);
     printf("Category: "); scanf("%s", report.category);
     printf("Severity level(1/2/3): "); scanf("%d", &report.severity);
-    printf("Description: "); scanf("%s", report.description);
+    
+    // Curățăm buffer-ul înainte de fgets sau scanf pentru descriere
+    getchar(); 
+    printf("Description: ");
+    fgets(report.description, sizeof(report.description), stdin);
+    report.description[strcspn(report.description, "\n")] = 0; // Scoate newline-ul
+
     strcpy(report.inspector_name, user);
-    int fd2 = open(path, O_RDONLY);
-    int cnt = 0;
-    while(read(fd2, &report, sizeof(Report)) == sizeof(Report)){
-        cnt++;
-    }
-    report.id = cnt;
+    report.timestamp = time(NULL);
 
     if(write(fd, &report, sizeof(Report)) == -1) {
         perror("Failed to write report");
@@ -233,7 +313,6 @@ void add(const char* district_name, const char* role, const char* user){
     }
 
     close(fd);
-
     log_operation(district_name, role, user, "Added new report");
 }
 
@@ -263,6 +342,10 @@ int main(int argc, char** argv){
             command = "view";
             district_name = argv[++i];
             report_id = atoi(argv[++i]);
+        } else if(strcmp(argv[i], "--remove_report") == 0){
+            command = "remove_report";
+            district_name - argv[++i];
+            report_id = atoi(argv[++i]);
         }
     }
     if(!role || !user || !command) {
@@ -278,6 +361,8 @@ int main(int argc, char** argv){
         list_reports(district_name);
     } else if(strcmp(command, "view") == 0){
         view_report(district_name, report_id);
+    } else if(strcmp(command, "remove_report") == 0) {
+        remove_report(district_name, role, user, report_id);
     }
 
     return 0;
