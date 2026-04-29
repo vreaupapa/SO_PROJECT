@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 #define ARG 2
 
@@ -288,6 +289,8 @@ void list_reports(const char *district){
     close(fd);
 }
 
+
+
 void remove_report(const char* district, const char* role, const char* user, int report_id) {
     if (strcmp(role, "manager") != 0) {
         printf("Error: Only managers can remove reports.\n");
@@ -340,6 +343,52 @@ void remove_report(const char* district, const char* role, const char* user, int
 
     close(fd);
     log_operation(district, role, user, "Removed a report");
+}
+
+void remove_district(const char* district_name, const char* role, const char* user){
+    //verifying the role, it need to be manager
+    if(strcmp("manager", role)!=0){
+        printf("Error: Only managers can remove entire districts.\n");
+        return;
+    }
+
+    if(district_name == NULL || strlen(district_name) == 0 || strcmp(district_name, ".") == 0 || strcmp(district_name, "..") == 0){
+        printf("Error: Invalid district_name");
+        return;
+    }
+
+    char link_name[256];
+    snprintf(link_name, sizeof(link_name), "active_reports-%s", district_name);
+    if(unlink(link_name) == 0){
+        printf("Symlink %s removed.\n", link_name);
+    } else {
+        perror("Warning: Could not remove Symlink(might not exist)");
+    }
+
+    pid_t pid = fork();
+
+    if(pid < 0){
+        perror("Fork failed");
+        return;
+    }
+
+    if(pid == 0){
+        //we are in the child process
+        execlp("rm", "rm", "-rf", district_name, NULL);
+
+        perror("Exec failed");
+        exit(EXIT_FAILURE);
+    } else {
+        //we are in the parent process
+        int status;
+        wait(&status);
+
+        if(WIFEXITED(status) && WEXITSTATUS(status) == 0){
+            printf("District %s and all its contents have been successfully deleted.\n", district_name);
+        } else {
+            printf("Error: 'rm' command failed to delete the district");
+        }
+    }
 }
 
 void add(const char* district_name, const char* role, const char* user){
@@ -442,6 +491,9 @@ int main(int argc, char** argv){
             }
             filter_reports(district_name, num_cond, conds);
             return 0; 
+        } else if(strcmp(argv[i], "--remove_district") == 0){
+            command = "remove_district";
+            district_name = argv[++i];
         }
     }
     
@@ -455,6 +507,7 @@ int main(int argc, char** argv){
     else if(strcmp(command, "list") == 0) list_reports(district_name);
     else if(strcmp(command, "view") == 0) view_report(district_name, report_id);
     else if(strcmp(command, "remove_report") == 0) remove_report(district_name, role, user, report_id);
+    else if(strcmp(command, "remove_district") == 0) remove_district(district_name, role, user);
 
     return 0;
 }
