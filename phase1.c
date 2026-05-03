@@ -449,7 +449,37 @@ void add(const char* district_name, const char* role, const char* user){
 
     manage_symlink(district_name);
     close(fd);
-    log_operation(district_name, role, user, "Added new report");
+
+    //pentru part 2
+
+    int monitor_fd = open(".monitor_pid", O_RDONLY);
+    int monitor_notified = 0; // Un steag pentru a sti ce scriem in log
+
+    if (monitor_fd != -1) {
+        char pid_buffer[32] = {0};
+        int bytes_read = read(monitor_fd, pid_buffer, sizeof(pid_buffer) - 1);
+        
+        if (bytes_read > 0) {
+            pid_t monitor_pid = atoi(pid_buffer);
+            
+            // Trimitem semnalul SIGUSR1 cu functia kill()
+            // kill returneaza 0 pe succes si -1 la eroare (ex: procesul nu mai exista)
+            if (kill(monitor_pid, SIGUSR1) == 0) {
+                monitor_notified = 1;
+            }
+        }
+        close(monitor_fd);
+    }
+
+    // --- LOGAREA CONFORM CERINTEI ---
+    char log_msg[256];
+    if (monitor_notified) {
+        snprintf(log_msg, sizeof(log_msg), "Added new report (Monitor successfully notified)");
+    } else {
+        snprintf(log_msg, sizeof(log_msg), "Added new report (Failed to notify monitor: missing PID file or process is dead)");
+    }
+    
+    log_operation(district_name, role, user, log_msg);
 }
 
 int main(int argc, char** argv){
